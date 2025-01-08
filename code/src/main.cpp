@@ -1,7 +1,11 @@
 #include <Arduino.h>
 
+// ---   T E S T S   ---
+//#include "tests/bluetooth_test.h" - passed
+//#include "tests/mpu6050_test.h" - passed
+#include "tests/motors_test.h"
 
-
+/*
 const int IN1 = 9;
 const int IN2 = 8;
 const int IN3 = 7;
@@ -62,3 +66,4 @@ void loop() {
     }
     watchdog = 0;
 }
+*/
