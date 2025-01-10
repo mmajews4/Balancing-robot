@@ -1,11 +1,16 @@
 #include <Arduino.h>
+#include <Wire.h>
+#include <MPU6050.h>
+#include "BluetoothSerial.h"
 
 // ---   T E S T S   ---
 //#include "tests/bluetooth_test.h" - passed
 //#include "tests/mpu6050_test.h" - passed
-#include "tests/motors_test.h"
+//#include "tests/motors_test.h" - passed
+#include "tests/motors_with_bluetooth_test.h"
 
 /*
+
 const int IN1 = 9;
 const int IN2 = 8;
 const int IN3 = 7;
@@ -34,7 +39,7 @@ void setup() {
 }
 
 void loop() {
-// -----------   MPU5060 MEASUREMENT AND KALMAN FILTER   ------
+// -----------   MPU5060 MEASUREMENT   ------
 
 
 // ----------------------------------   P I D   ---------------
@@ -48,22 +53,8 @@ void loop() {
     lastError = currError;
 
     throttle = xP + xI + xD;
-
-    if(throttle < -255) throttle = -255;
-    if(throttle > 255) throttle = 255;
-
-    throttleA = (throttle + turn)*0.9;
-    if(throttleA < -255) throttleA = -255;
-    if(throttleA > 255) throttleA = 255;
-
 // -----------------------   M O T O R   C O N T R O L L   -----
 
-
-
-// MPU5060 sampling frequency
-    while(...){
-        watchdog++;
-    }
-    watchdog = 0;
 }
+
 */
