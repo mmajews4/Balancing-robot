@@ -1,97 +1,3 @@
-/*#include <Arduino.h>
-#include <Wire.h>
-#include <MPU6050.h>
-#include "BluetoothSerial.h"
-
-const int STEP_R = 5;
-const int DIR_R = 17;
-const int STEP_L = 19;
-const int DIR_L = 18;
-const int MAX_SPEED_DELAY = 420; // 420+780=1200 780(minimal from my throttle equation) in steps/sec corrected by max throttle value
-const int SAMPLING_PERIOD = 10000; // micros
-
-int throttle = 0, throttleL = 0, throttleR = 0, turn = 0;
-int time_to_next_step = 1000;
-int64_t currSampleTime, prevSampleTime, currMotorTime, prevMotorTime;
-
-BluetoothSerial ESP_BT; // Create a BluetoothSerial object
-String commandBuffer = ""; // Buffer for incoming command
-int run = 0;
-
-void setup() {
-    Serial.begin(115200);
-    ESP_BT.begin("ESP32_BT"); // Bluetooth device name
-    prevSampleTime = micros();
-    prevMotorTime = micros();
-    pinMode(DIR_R, OUTPUT);
-    pinMode(DIR_L, OUTPUT);
-    pinMode(STEP_R, OUTPUT);
-    pinMode(STEP_L, OUTPUT);
-    digitalWrite(DIR_L, LOW);
-    digitalWrite(DIR_R, LOW);
-    digitalWrite(STEP_L, LOW);
-    digitalWrite(STEP_R, LOW);
-}
-
-void processBluetoothCommand() {
-    while (ESP_BT.available()) {
-        char incomingChar = (char)ESP_BT.read();
-        if (incomingChar == '\n') { // End of command
-            if (commandBuffer == "r") {
-                run = 1;
-            } else if (commandBuffer == "t") {
-                run = 0;
-            } else {
-                throttle = commandBuffer.toInt();
-            }
-            commandBuffer = ""; // Clear buffer
-        } else {
-            commandBuffer += incomingChar; // Append to buffer
-        }
-    }
-}
-
-void motorControlLogic() {
-    if (run) {
-        if (throttle < -255) throttle = -255;
-        if (throttle > 255) throttle = 255;
-
-        throttleL = throttle + turn;
-        if (throttleL < -255) throttleL = -255;
-        if (throttleL > 255) throttleL = 255;
-
-        throttleR = throttle - turn;
-        if (throttleR < -255) throttleR = -255;
-        if (throttleR > 255) throttleR = 255;
-
-        digitalWrite(DIR_L, throttleL <= 0 ? HIGH : LOW);
-        digitalWrite(DIR_R, throttleR <= 0 ? LOW : HIGH);
-
-        if (throttle != 0) time_to_next_step = MAX_SPEED_DELAY + (200000 / abs(throttle));
-
-        currMotorTime = micros();
-        if (currMotorTime - prevMotorTime >= time_to_next_step) {
-            digitalWrite(STEP_R, HIGH);
-            digitalWrite(STEP_L, HIGH);
-            delayMicroseconds(10); // Trigger step
-            digitalWrite(STEP_R, LOW);
-            digitalWrite(STEP_L, LOW);
-            prevMotorTime = currMotorTime;
-        }
-    }
-}
-
-void loop() {
-    if (ESP_BT.connected()) {
-        processBluetoothCommand();
-        motorControlLogic();
-    } else {
-        Serial.println("Bluetooth not connected. Waiting...");
-        delay(1000);
-    }
-}*/
-
-
 #include <Arduino.h>
 #include <Wire.h>
 #include <MPU6050.h>
@@ -103,6 +9,7 @@ const int STEP_L = 19;
 const int DIR_L = 18;
 const int MAX_SPEED_DELAY = 420; // 420+780=1200 780(mnimal from my throttle equation)in stpes/sec corrected by max throttle value
 const int SAMPLING_PERIOD = 10000; // millis
+const int SENDING_PERIOD = 20; // one in how many periods i send parameters via bluetooth
 
 int throttle = 0, throttleL = 0, throttleR = 0, turn = 0;
 int time_to_next_step = 1000;
@@ -110,8 +17,10 @@ int wait_for_sample = 1;
 int64_t currSampleTime, prevSampleTime, currMotorTime, prevMotorTime;
 
 BluetoothSerial ESP_BT; // Create a BluetoothSerial object
-String command;
+char incomingChar;
+String commandBuffer = "";
 int run = 0;
+int sendDelay = SENDING_PERIOD;
 
 void setup() {
     Serial.begin(115200);
@@ -132,17 +41,25 @@ void loop(){
     if (ESP_BT.connected()) {
         // Receive data from Bluetooth
         if (ESP_BT.available()){
-            command = ESP_BT.readStringUntil('\n');
-        }
-        if(command == "r"){ //run
-            run = 1;
-        } else if(command == "t"){ //terminate
-            run = 0;
-        } else {
-            throttle = command.toInt();
+            incomingChar = ESP_BT.read();  // Read one character
+
+            if(incomingChar == 'r'){ //run
+                run = 1;
+            } else if(incomingChar == 't'){ //terminate
+                run = 0;
+            } else {
+                throttle = 20 * (incomingChar - '0'); //konwersja char do int
+            }
         }
 
         if(run){
+            // Sending data to the controller every SENDING_PERIOD
+            if(sendDelay == SENDING_PERIOD){
+                ESP_BT.print("Sending long test message");
+                sendDelay = 0;
+            }
+            sendDelay++;
+
             if(throttle < -255) throttle = -255;
             if(throttle > 255) throttle = 255;
 
