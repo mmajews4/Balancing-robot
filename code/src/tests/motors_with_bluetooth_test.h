@@ -8,8 +8,8 @@ const int DIR_R = 17;
 const int STEP_L = 19;
 const int DIR_L = 18;
 const int MAX_SPEED_DELAY = 420; // 420+780=1200 780(mnimal from my throttle equation)in stpes/sec corrected by max throttle value
-const int SAMPLING_PERIOD = 10000; // millis
-const int SENDING_PERIOD = 20; // one in how many periods i send parameters via bluetooth
+const int SAMPLING_PERIOD = 20000; // millis
+const int SENDING_PERIOD = 10; // one in how many periods i send parameters via bluetooth
 
 int throttle = 0, throttleL = 0, throttleR = 0, turn = 0;
 int time_to_next_step = 1000;
@@ -40,7 +40,7 @@ void setup() {
 void loop(){
     if (ESP_BT.connected()) {
         // Receive data from Bluetooth
-        if (ESP_BT.available()){
+/*        if (ESP_BT.available()){
             incomingChar = ESP_BT.read();  // Read one character
 
             if(incomingChar == 'r'){ //run
@@ -51,11 +51,23 @@ void loop(){
                 throttle = 20 * (incomingChar - '0'); //konwersja char do int
             }
         }
-
+*/
+        if (ESP_BT.available()) {
+            String receivedData = ESP_BT.readString(); // Read incoming data
+            if(receivedData == "r"){ //run
+                run = 1;
+            } else if(receivedData == "t"){ //terminate
+                run = 0;
+            } else {
+                throttle = receivedData.toInt(); //konwersja char do int
+            }
+            ESP_BT.println(receivedData);
+        }
         if(run){
+            delayMicroseconds(1700);
             // Sending data to the controller every SENDING_PERIOD
             if(sendDelay == SENDING_PERIOD){
-                ESP_BT.print("Sending long test message");
+                ESP_BT.println(throttle);
                 sendDelay = 0;
             }
             sendDelay++;
@@ -89,8 +101,8 @@ void loop(){
             // jeżli sybkość samplowania jest szybsza niż szybkość motoru to przechodzić przez tą pętę nawet kila razy i doppiero za którymś puścić silnik
             // żeby nie staneły koła i czały czas updateowała się szykość
 
-            // tak żeby thorttle było liniowe
-            if(throttle != 0) time_to_next_step = MAX_SPEED_DELAY + ((200000/abs(throttle))); // dobrać najmniejszą prędkość
+            // tak żeby thorttle było liniowe                          200000
+            if(throttle != 0) time_to_next_step = MAX_SPEED_DELAY + ((1000000/abs(throttle))); // dobrać najmniejszą prędkość
 
             // w trakcie czekania na kolejnego sampla ma kręcić silnikami
             do{
@@ -106,7 +118,7 @@ void loop(){
                 if(wait_for_sample){
                     digitalWrite(STEP_R, HIGH);
                     digitalWrite(STEP_L, HIGH);
-                    delayMicroseconds(10); // według dokumentacji wystraczy 1us impuls żeby zainicjować step, falling edge nic nie robi
+                    delayMicroseconds(20); // według dokumentacji wystraczy 1us impuls żeby zainicjować step, falling edge nic nie robi
                     digitalWrite(STEP_R, LOW);
                     digitalWrite(STEP_L, LOW);
                     prevMotorTime = currMotorTime;
