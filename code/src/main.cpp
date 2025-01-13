@@ -14,16 +14,17 @@ const int STEP_R = 5;
 const int DIR_R = 17;
 const int STEP_L = 19;
 const int DIR_L = 18;
-const int MAX_ACCELERATION = 20;
-const int MAX_SPEED_DELAY = 320; // 420+780=1200 780(mnimal from my throttle equation)in stpes/sec corrected by max throttle value
-const int SAMPLING_PERIOD = 20000; // millis
+const int MAX_SPEED_DELAY = 100; // 420+780=1200 780(mnimal from my throttle equation)in stpes/sec corrected by max throttle value
+const int SAMPLING_PERIOD = 10000; // millis
 const int SENDING_PERIOD = 10; // one in how many periods i send parameters via bluetooth
 
 int throttle = 0, last_throttle = 0, motor_throttle = 0, throttleL = 0, throttleR = 0, turn = 0;
-int time_to_next_step = 1000;
+int time_to_next_step_L = 1000, time_to_next_step_R = 1000;
 int wait_for_sample = 1;
-int64_t currSampleTime, prevSampleTime, currMotorTime, prevMotorTime;
+int64_t currSampleTime, prevSampleTime, currMotorTimeL, prevMotorTimeL, currMotorTimeR, prevMotorTimeR;
 int64_t exec_time = 0;
+float acceleration = 30;
+float steer_factor = 0.8;
 
 float steer = 0;
 float adjustment = 0;
@@ -39,9 +40,9 @@ void tune();
 
 //-----------------   P I D   --------------
 // dobrać według symulacji
-float vP = 50;     
-float vI = 0.01; //0.005;
-float vD = 10;
+float vP = 45;     
+float vI = 4;
+float vD = 30;
 float targetValue = 0;
 float xP, xI, xD, currentValue, integralSum, currError, lastError;
 float duration;
@@ -51,13 +52,17 @@ MPU6050 mpu;
 
 float accelOffsetX = 0, accelOffsetY = 0, accelOffsetZ = 0;
 float gyroOffsetX = 0, gyroOffsetY = 0, gyroOffsetZ = 0;
+float prevAxCal = 0, axFiltered = 0;
+float prevAyCal = 0, ayFiltered = 0;
+float prevAzCal = 0, azFiltered = 0;
 
 float accelAngleX, accelAngleY;
 float gyroAngleX, gyroAngleY;
 float angleX, angleY;
-float elapsedTime, currentTime, previousTime;
+double elapsedTime, currentTime, previousTime;
 int16_t ax, ay, az, gx, gy, gz;
 float axCal, ayCal, azCal, gxCal, gyCal, gzCal;
+float alpha = 0.9; // low pass filter factor
 
 void take_measurement();
 void calibrateMPU6050();
@@ -95,7 +100,7 @@ void loop(){
             switch(incomingChar){
                 case 'r':   // run
                     run = 1;
-                    previousTime = millis(); // to not mess up gyroAngle mesurement
+                    previousTime = micros(); // to not mess up gyroAngle mesurement
                     gyroAngleX = 0;
                     break;
                 case 't':   // terminate
@@ -108,9 +113,15 @@ void loop(){
                     run = 0;
                     tune(); // it exists because while driving sending more than one character creates unacceptable delay
                     break;
+                case 'w':
+                    steer = steer + steer_factor;
+                    break;
+                case 's':
+                    steer = steer - steer_factor;
+                    break;
                 default:    // steer value 0/9 -> -0.8/1.0
                     if(incomingChar >= '0' && incomingChar <= '9') // so that non number things doesn't change steer
-                        steer =  0.2 * (incomingChar - '0' - 4); //konwersja char do int
+                        steer =  steer_factor * (incomingChar - '0' - 4); //konwersja char do int
                     break;
             }
         }
@@ -119,7 +130,8 @@ void loop(){
             // --------------------------------------------   P I D   --------------------
             take_measurement();
 
-            currentValue = angleX + steer + adjustment;
+            currentValue = angleX + adjustment;
+            targetValue = steer;
         
             xP = (targetValue - currentValue)* vP;
             integralSum += (targetValue - currentValue);
@@ -133,8 +145,8 @@ void loop(){
 
             // Sending data to the controller every SENDING_PERIOD
             if(sendDelay == SENDING_PERIOD){
-                sprintf(message, "P:%.0f   I:%.1f   D:%.0f\nAngle: %0.3f\nA+Str: %0.3f\nThrottle: %d   Steer: %.1f\nExec_t: %d", \
-                    xP, xI, xD, angleX, currentValue, throttle, steer, exec_time);
+                sprintf(message, "-----\nP:%.0f  I:%.1f  D:%.0f\nAngle: %0.3f\nSteer: %0.3f\nThrottle: %d\n", \
+                    xP, xI, xD, angleX, steer, throttle);
                 ESP_BT.print(message);
                 sendDelay = 0;
             }
@@ -146,10 +158,10 @@ void loop(){
             else if(throttle > 255) throttle = 255;
 
             
-            if(last_throttle - throttle < -MAX_ACCELERATION){
-                motor_throttle = last_throttle + MAX_ACCELERATION;
-            } else if(last_throttle - throttle > MAX_ACCELERATION){
-                motor_throttle = last_throttle - MAX_ACCELERATION;
+            if(last_throttle - throttle < -acceleration){
+                motor_throttle = last_throttle + acceleration;
+            } else if(last_throttle - throttle > acceleration){
+                motor_throttle = last_throttle - acceleration;
             } else {
                 motor_throttle = throttle;
             }
@@ -184,7 +196,9 @@ void loop(){
             // żeby nie staneły koła i czały czas updateowała się szykość
 
             // tak żeby thorttle było liniowe                               200000
-            if(motor_throttle != 0) time_to_next_step = MAX_SPEED_DELAY + ((100000/abs(motor_throttle))); // dobrać najmniejszą prędkość
+            if(throttleR != 0) time_to_next_step_R = MAX_SPEED_DELAY + ((100000/abs(throttleR)));
+
+            if(throttleL != 0) time_to_next_step_L = MAX_SPEED_DELAY + ((100000/abs(throttleL)));
 
             exec_time = prevSampleTime - micros();
 
@@ -193,8 +207,9 @@ void loop(){
                 // czeka aż minie czas do zrobienia kolejnego stepu
                 // jeżeli ten czas jest większy niż czas do sampla to wyjdzie z czekania na motor i zrobi sampla
                 do{
-                    currMotorTime = micros();
-                    currSampleTime = currMotorTime;
+                    currMotorTimeL = micros();
+                    currMotorTimeR = currMotorTimeL;
+                    currSampleTime = currMotorTimeL;
                     wait_for_sample = (currSampleTime - prevSampleTime < SAMPLING_PERIOD);
                 }while(currMotorTime - prevMotorTime < time_to_next_step && wait_for_sample);
                 
@@ -227,7 +242,7 @@ void tune(){
             switch(command[0]){
                 case 'r':   // run
                     run = 1;
-                    previousTime = millis(); // to not mess up gyroAngle mesurement
+                    previousTime = micros(); // to not mess up gyroAngle mesurement
                     gyroAngleX = 0;
                     break;
                 case 't':   // terminate
@@ -248,6 +263,14 @@ void tune(){
                     command.remove(0, 1);
                     vD = command.toFloat();
                     break;
+                case 'a':
+                    command.remove(0, 1);
+                    acceleration = command.toFloat();
+                    break;
+                case 's':
+                    command.remove(0, 1);
+                    steer_factor = command.toFloat();
+                    break;
                 case 'm':
                     command.remove(0, 1);
                     adjustment = command.toFloat();
@@ -256,14 +279,15 @@ void tune(){
                     calibrateMPU6050();
                     ESP_BT.print("Calibrated\n");
                     break;
-                default:    // steer value 0/9 -> -0.8/1.0
-                    steer =  0.2 * (incomingChar - '0' - 4); //konwersja char do int
+                default:    // steer value 1/9 -> -2.0/2.0
+                    if((command[0] >= '0' && command[0] <= '9')||(command[0] >= 0 && command[0] <= 9)) // zabezpieczenie przed niewałaściwym stringiem
+                        steer =  steer_factor * (command[0] - '1' - 5); //konwersja char do int
                     break;
             }
         }
         take_measurement();
-        sprintf(message, "P:%.0f   I:%.3f   D:%.0f\nAngle: %0.3f\nA+Str: %0.3f\nAdjst: %0.3f\nGyro: %.3f   Accel: %.3f",\
-            vP, vI, vD, angleX, angleX + steer + adjustment, adjustment, gyroAngleX, accelAngleX);
+        sprintf(message, "-----\nP:%.0f   I:%.2f   D:%.0f\nAngle: %0.3f\nSteer: %0.1f\nGyro: %.3f  Accel: %.3f\n",\
+            vP, vI, vD, angleX, steer, gyroAngleX, accelAngleX);
         ESP_BT.print(message);
 
         delay(200);
@@ -282,13 +306,21 @@ void take_measurement(){
     gyCal = gy - gyroOffsetY;
     gzCal = gz - gyroOffsetZ;
 
+    // Apply low-pass filter to accelerometer data
+    axFiltered = alpha * axCal + (1 - alpha) * prevAxCal;
+    ayFiltered = alpha * ayCal + (1 - alpha) * prevAyCal;
+    azFiltered = alpha * azCal + (1 - alpha) * prevAzCal;
+    prevAxCal = axFiltered;
+    prevAyCal = ayFiltered;
+    prevAzCal = azFiltered;
+
     // Calculate accelerometer angles
-    accelAngleX = atan(ayCal / sqrt(pow(axCal, 2) + pow(azCal, 2))) * 180 / PI;
+    accelAngleX = atan(ayFiltered / sqrt(pow(axFiltered, 2) + pow(azFiltered, 2))) * 180 / PI;
 //    accelAngleY = atan(-axCal / sqrt(pow(ayCal, 2) + pow(azCal, 2))) * 180 / PI;
 
     // Calculate elapsed time
-    currentTime = millis();
-    elapsedTime = (currentTime - previousTime) / 1000.0;
+    currentTime = micros();
+    elapsedTime = (currentTime - previousTime) / 1000000.0;
     previousTime = currentTime;
 
     // Integrate gyroscope data
@@ -296,7 +328,7 @@ void take_measurement(){
 //    gyroAngleY += gyCal / 131.0 * elapsedTime;
 
     // Complementary filter
-    angleX = 0.92 * gyroAngleX + 0.08 * accelAngleX;
+    angleX = 0.98 * gyroAngleX + 0.02 * accelAngleX;
 //    angleY = 0.92 * gyroAngleY + 0.08 * accelAngleY;
 }
 
