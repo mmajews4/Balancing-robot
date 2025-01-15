@@ -16,9 +16,8 @@ const int STEP_R = 5;
 const int DIR_R = 17;
 const int STEP_L = 19;
 const int DIR_L = 18;
-const int MAX_SPEED_DELAY = -1650; // 2150-1650=500
-//const int MAX_SPEED_DELAY = -3420; // 3920-3420=500 (mnimal from my throttle equation)in stpes/sec corrected by max throttle value
-const int SAMPLING_PERIOD = 20000; // millis
+const int MAX_SPEED_DELAY = -1200; // 1600-1200=400 (mnimal from my throttle equation)in stpes/sec corrected by max throttle value
+const int SAMPLING_PERIOD = 10000; // millis
 const int SENDING_PERIOD = 10; // one in how many periods i send parameters via bluetooth
 
 int throttle = 0, last_throttle = 0, motor_throttle = 0, throttleL = 0, throttleR = 0;
@@ -27,7 +26,7 @@ int wait_for_sample = 1, wait_for_motor_L = 1, wait_for_motor_R = 1;
 int do_step_R, do_step_L;
 int64_t currSampleTime, prevSampleTime, currMotorTimeL, prevMotorTimeL, currMotorTimeR, prevMotorTimeR;
 int64_t exec_time = 0;
-float acceleration = 20, steer_factor = 0.8;
+float acceleration = 40, steer_factor = 0.8;
 float turn = 0, turn_factor = 10, turn_time_counter = 0, turn_dir = 0;
 
 float steer = 0;
@@ -40,15 +39,16 @@ String command = "";
 int run = 0;
 int sendDelay = SENDING_PERIOD;
 char message[100];
+char data[20];
 void tune();
 
 //-----------------   P I D   --------------
 // dobrać według symulacji
-float vP = 130;     
-float vI = 18;
-float vD = 1500;
+float vP = 80;     
+float vI = 5;
+float vD = 80;
 float targetValue = 0;
-float xP, xI, xD, currentValue, integralSum, currError, lastError;
+float xP, xI, xD, currentValue, integralSum, currError, lastError, filteredDerivative;
 float duration;
 
 // -----------   ANGLE MEASUREMENT   ------
@@ -66,7 +66,7 @@ float angleX, angleY;
 double elapsedTime, currentTime, previousTime;
 int16_t ax, ay, az, gx, gy, gz;
 float axCal, ayCal, azCal, gxCal, gyCal, gzCal;
-float alpha = 0.1; // low pass filter factor
+float alpha = 0.2; // low pass filter factor
 
 void take_measurement();
 void calibrateMPU6050();
@@ -150,7 +150,8 @@ void loop(){
             integralSum += (targetValue - currentValue);
             xI = integralSum * vI;
             currError = (targetValue - currentValue);
-            xD = (currError - lastError)* vD;
+            filteredDerivative = 0.5 * filteredDerivative + 0.5 * (currError - lastError);
+            xD = filteredDerivative * vD;
             lastError = currError;
 
             throttle = xP + xI + xD;
@@ -164,6 +165,8 @@ void loop(){
                 sendDelay = 0;
             }
             sendDelay++;
+            sprintf(data, "%0.3f %0.2f %d\n", angleX, steer, throttle);
+            Serial.print(data);
 
             // ---------------------------------   M O T O R   C O N T R O L L   ---------
 
@@ -216,10 +219,10 @@ void loop(){
             // żeby nie staneły koła i czały czas updateowała się szykość
 
             // tak żeby thorttle było liniowe                            200000
-            if(throttleR != 0) time_to_next_step_R = MAX_SPEED_DELAY + ((550000/abs(throttleR)));
+            if(throttleR != 0) time_to_next_step_R = MAX_SPEED_DELAY + ((408000/abs(throttleR)));
             else time_to_next_step_R = 3000000;
 
-            if(throttleL != 0) time_to_next_step_L = MAX_SPEED_DELAY + ((550000/abs(throttleL)));
+            if(throttleL != 0) time_to_next_step_L = MAX_SPEED_DELAY + ((408000/abs(throttleL)));
             else time_to_next_step_L = 3000000;
 
             exec_time = prevSampleTime - micros();
@@ -355,7 +358,7 @@ void take_measurement(){
     previousTime = currentTime;
 
     // Integrate gyroscope data
-    gyroAngleX = 0.99 * (gyroAngleX + gxCal / 131.0 * elapsedTime) + 0.01 * accelAngleX;
+    gyroAngleX = 0.985 * (gyroAngleX + gxCal / 131.0 * elapsedTime) + 0.015 * accelAngleX;
 
     // Complementary filter
 //    angleX = 0.98 * gyroAngleX + 0.02 * angleX;
