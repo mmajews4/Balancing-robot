@@ -9,15 +9,12 @@
 //#include "tests/motors_test.h" - passed
 //#include "tests/motors_with_bluetooth_test.h"// - passed
 
-// Half-step PID parameters
-
 // -------   M O T O R   C O N T R O L L  ---
 const int STEP_R = 5;
 const int DIR_R = 17;
 const int STEP_L = 19;
 const int DIR_L = 18;
-const int MAX_SPEED_DELAY = -1650; // 2150-1650=500
-//const int MAX_SPEED_DELAY = -3420; // 3920-3420=500 (mnimal from my throttle equation)in stpes/sec corrected by max throttle value
+const int MAX_SPEED_DELAY = -3120; // 3920-3120=800 (mnimal from my throttle equation)in stpes/sec corrected by max throttle value
 const int SAMPLING_PERIOD = 20000; // millis
 const int SENDING_PERIOD = 10; // one in how many periods i send parameters via bluetooth
 
@@ -45,8 +42,8 @@ void tune();
 //-----------------   P I D   --------------
 // dobrać według symulacji
 float vP = 130;     
-float vI = 18;
-float vD = 1500;
+float vI = 2;
+float vD = 80;
 float targetValue = 0;
 float xP, xI, xD, currentValue, integralSum, currError, lastError;
 float duration;
@@ -216,10 +213,10 @@ void loop(){
             // żeby nie staneły koła i czały czas updateowała się szykość
 
             // tak żeby thorttle było liniowe                            200000
-            if(throttleR != 0) time_to_next_step_R = MAX_SPEED_DELAY + ((550000/abs(throttleR)));
+            if(throttleR != 0) time_to_next_step_R = MAX_SPEED_DELAY + ((1000000/abs(throttleR)));
             else time_to_next_step_R = 3000000;
 
-            if(throttleL != 0) time_to_next_step_L = MAX_SPEED_DELAY + ((550000/abs(throttleL)));
+            if(throttleL != 0) time_to_next_step_L = MAX_SPEED_DELAY + ((1000000/abs(throttleL)));
             else time_to_next_step_L = 3000000;
 
             exec_time = prevSampleTime - micros();
