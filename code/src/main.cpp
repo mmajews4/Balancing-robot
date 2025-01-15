@@ -9,22 +9,26 @@
 //#include "tests/motors_test.h" - passed
 //#include "tests/motors_with_bluetooth_test.h"// - passed
 
+// Half-step PID parameters
+
 // -------   M O T O R   C O N T R O L L  ---
 const int STEP_R = 5;
 const int DIR_R = 17;
 const int STEP_L = 19;
 const int DIR_L = 18;
-const int MAX_SPEED_DELAY = 100; // 420+780=1200 780(mnimal from my throttle equation)in stpes/sec corrected by max throttle value
-const int SAMPLING_PERIOD = 10000; // millis
+const int MAX_SPEED_DELAY = -1650; // 2150-1650=500
+//const int MAX_SPEED_DELAY = -3420; // 3920-3420=500 (mnimal from my throttle equation)in stpes/sec corrected by max throttle value
+const int SAMPLING_PERIOD = 20000; // millis
 const int SENDING_PERIOD = 10; // one in how many periods i send parameters via bluetooth
 
-int throttle = 0, last_throttle = 0, motor_throttle = 0, throttleL = 0, throttleR = 0, turn = 0;
+int throttle = 0, last_throttle = 0, motor_throttle = 0, throttleL = 0, throttleR = 0;
 int time_to_next_step_L = 1000, time_to_next_step_R = 1000;
-int wait_for_sample = 1;
+int wait_for_sample = 1, wait_for_motor_L = 1, wait_for_motor_R = 1;
+int do_step_R, do_step_L;
 int64_t currSampleTime, prevSampleTime, currMotorTimeL, prevMotorTimeL, currMotorTimeR, prevMotorTimeR;
 int64_t exec_time = 0;
-float acceleration = 30;
-float steer_factor = 0.8;
+float acceleration = 20, steer_factor = 0.8;
+float turn = 0, turn_factor = 10, turn_time_counter = 0, turn_dir = 0;
 
 float steer = 0;
 float adjustment = 0;
@@ -40,9 +44,9 @@ void tune();
 
 //-----------------   P I D   --------------
 // dobrać według symulacji
-float vP = 45;     
-float vI = 4;
-float vD = 30;
+float vP = 130;     
+float vI = 18;
+float vD = 1500;
 float targetValue = 0;
 float xP, xI, xD, currentValue, integralSum, currError, lastError;
 float duration;
@@ -62,7 +66,7 @@ float angleX, angleY;
 double elapsedTime, currentTime, previousTime;
 int16_t ax, ay, az, gx, gy, gz;
 float axCal, ayCal, azCal, gxCal, gyCal, gzCal;
-float alpha = 0.9; // low pass filter factor
+float alpha = 0.1; // low pass filter factor
 
 void take_measurement();
 void calibrateMPU6050();
@@ -87,7 +91,8 @@ void setup() {
     }
     calibrateMPU6050();
     prevSampleTime = micros();
-    prevMotorTime = micros();
+    prevMotorTimeL = prevSampleTime;
+    prevMotorTimeR = prevSampleTime;
 }
 
 void loop(){
@@ -119,6 +124,14 @@ void loop(){
                 case 's':
                     steer = steer - steer_factor;
                     break;
+                case 'a':
+                    turn_dir = 1;
+                    turn_time_counter = 30;
+                    break;
+                case 'd':
+                    turn_dir = -1;
+                    turn_time_counter = 30;
+                    break;
                 default:    // steer value 0/9 -> -0.8/1.0
                     if(incomingChar >= '0' && incomingChar <= '9') // so that non number things doesn't change steer
                         steer =  steer_factor * (incomingChar - '0' - 4); //konwersja char do int
@@ -145,8 +158,8 @@ void loop(){
 
             // Sending data to the controller every SENDING_PERIOD
             if(sendDelay == SENDING_PERIOD){
-                sprintf(message, "-----\nP:%.0f  I:%.1f  D:%.0f\nAngle: %0.3f\nSteer: %0.3f\nThrottle: %d\n", \
-                    xP, xI, xD, angleX, steer, throttle);
+                sprintf(message, "-----\nP:%.0f   I:%.1f   D:%.0f\nAngle: %0.3f\nSteer: %0.2f    Turn: %.2f\nThrottle: %d\n", \
+                    xP, xI, xD, angleX, steer, turn, throttle);
                 ESP_BT.print(message);
                 sendDelay = 0;
             }
@@ -167,7 +180,13 @@ void loop(){
             }
             last_throttle = motor_throttle;
             
-//            motor_throttle = throttle;
+            // (filter turn)slowly dampening turn
+            turn = 0.5 * turn + 0.5 * turn_factor * turn_dir;
+            if(turn_time_counter > 0){  // turn for 30 cycles, then stop turning
+                turn_time_counter--;
+            } else {
+                turn_dir = 0;
+            }
 
             throttleL = motor_throttle + turn;
             if(throttleL < -255) throttleL = -255;
@@ -189,16 +208,19 @@ void loop(){
                 digitalWrite(DIR_R, LOW);
             }
 
+
             // zrobić wersję jeszcze z użyciem rtosa jak by to nie działo
 
 
             // jeżli sybkość samplowania jest szybsza niż szybkość motoru to przechodzić przez tą pętę nawet kila razy i doppiero za którymś puścić silnik
             // żeby nie staneły koła i czały czas updateowała się szykość
 
-            // tak żeby thorttle było liniowe                               200000
-            if(throttleR != 0) time_to_next_step_R = MAX_SPEED_DELAY + ((100000/abs(throttleR)));
+            // tak żeby thorttle było liniowe                            200000
+            if(throttleR != 0) time_to_next_step_R = MAX_SPEED_DELAY + ((550000/abs(throttleR)));
+            else time_to_next_step_R = 3000000;
 
-            if(throttleL != 0) time_to_next_step_L = MAX_SPEED_DELAY + ((100000/abs(throttleL)));
+            if(throttleL != 0) time_to_next_step_L = MAX_SPEED_DELAY + ((550000/abs(throttleL)));
+            else time_to_next_step_L = 3000000;
 
             exec_time = prevSampleTime - micros();
 
@@ -211,16 +233,25 @@ void loop(){
                     currMotorTimeR = currMotorTimeL;
                     currSampleTime = currMotorTimeL;
                     wait_for_sample = (currSampleTime - prevSampleTime < SAMPLING_PERIOD);
-                }while(currMotorTime - prevMotorTime < time_to_next_step && wait_for_sample);
+                    wait_for_motor_L = (currMotorTimeL - prevMotorTimeL < time_to_next_step_L);
+                    wait_for_motor_R = (currMotorTimeR - prevMotorTimeR < time_to_next_step_R);
+                }while(wait_for_motor_R && wait_for_motor_R && wait_for_sample);
                 
                 // Jeżeli Sample time jest mniejszy niż Motor Delay to ominie motor i zrobi kolejny pomiar
                 if(wait_for_sample){
-                    digitalWrite(STEP_R, HIGH);
-                    digitalWrite(STEP_L, HIGH);
+                    do_step_R = currMotorTimeR - prevMotorTimeR > time_to_next_step_R - 600; // 390 us is a resulution of one throttle
+                    do_step_L = currMotorTimeL - prevMotorTimeL > time_to_next_step_L - 600; // it us used so that both motors fire unless there is a turn
+                    if(do_step_R) digitalWrite(STEP_R, HIGH);
+                    if(do_step_L) digitalWrite(STEP_L, HIGH);
                     delayMicroseconds(10); // według dokumentacji wystraczy 1us impuls żeby zainicjować step, falling edge nic nie robi
-                    digitalWrite(STEP_R, LOW);
-                    digitalWrite(STEP_L, LOW);
-                    prevMotorTime = currMotorTime;
+                    if(do_step_R){
+                        digitalWrite(STEP_R, LOW);
+                        prevMotorTimeR = currMotorTimeR;
+                    }
+                    if(do_step_L){
+                        digitalWrite(STEP_L, LOW);
+                        prevMotorTimeL = currMotorTimeL;
+                    }
                 }
             }while(wait_for_sample);
             prevSampleTime = currSampleTime;
@@ -324,12 +355,11 @@ void take_measurement(){
     previousTime = currentTime;
 
     // Integrate gyroscope data
-    gyroAngleX += gxCal / 131.0 * elapsedTime;
-//    gyroAngleY += gyCal / 131.0 * elapsedTime;
+    gyroAngleX = 0.99 * (gyroAngleX + gxCal / 131.0 * elapsedTime) + 0.01 * accelAngleX;
 
     // Complementary filter
-    angleX = 0.98 * gyroAngleX + 0.02 * accelAngleX;
-//    angleY = 0.92 * gyroAngleY + 0.08 * accelAngleY;
+//    angleX = 0.98 * gyroAngleX + 0.02 * angleX;
+    angleX = gyroAngleX;
 }
 
 void calibrateMPU6050() {
