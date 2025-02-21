@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <MPU6050.h>
 #include "BluetoothSerial.h"
+#include "PID.h"
 
 // ---   T E S T S   ---
 //#include "tests/bluetooth_test.h" - passed
@@ -11,6 +12,12 @@
 
 // Half-step PID parameters
 
+// controll parameters 
+enum State {TUNE, RUN};
+enum Mode {ANGLE_CONTROLL, POSITION_CONTROLL, SPEED_CONTROLL};
+State state = TUNE;
+Mode mode = ANGLE_CONTROLL;
+
 // -------   M O T O R   C O N T R O L L  ---
 const int STEP_R = 5;
 const int DIR_R = 17;
@@ -18,8 +25,8 @@ const int STEP_L = 19;
 const int DIR_L = 18;
 const int MAX_SPEED_DELAY = -1650; // 2150-1650=500
 //const int MAX_SPEED_DELAY = -3420; // 3920-3420=500 (mnimal from my throttle equation)in stpes/sec corrected by max throttle value
-const int SAMPLING_PERIOD = 20000; // millis
-const int SENDING_PERIOD = 10; // one in how many periods i send parameters via bluetooth
+const int SAMPLING_PERIOD = 30000; // millis
+const int SENDING_PERIOD = 20; // one in how many periods i send parameters via bluetooth
 
 int throttle = 0, last_throttle = 0, motor_throttle = 0, throttleL = 0, throttleR = 0;
 int time_to_next_step_L = 1000, time_to_next_step_R = 1000;
@@ -37,19 +44,36 @@ float adjustment = 0;
 BluetoothSerial ESP_BT; // Create a BluetoothSerial object
 char incomingChar;
 String command = "";
-int run = 0;
+uint8_t show_stats = 1; // you can hide stats while riding so that robot cycle doesn't stop momentarly to send bluetooh message
 int sendDelay = SENDING_PERIOD;
-char message[100];
+int BT_timeout = 10;
+char message[180];
 void tune();
 
 //-----------------   P I D   --------------
 // dobrać według symulacji
-float vP = 130;     
-float vI = 18;
-float vD = 1500;
-float targetValue = 0;
-float xP, xI, xD, currentValue, integralSum, currError, lastError;
-float duration;
+PID angPID;
+PID posPID;
+PID spdPID;
+
+void initialize_PIDs(){
+    angPID.vP = 130;     
+    angPID.vI = 18;
+    angPID.vD = 1500;
+
+    posPID.vP = 0;     
+    posPID.vI = 0;
+    posPID.vD = 0;
+
+    spdPID.vP = 0;     
+    spdPID.vI = 0;
+    spdPID.vD = 0;
+}
+
+int position = 0; // in steps
+int posL = 0;
+int posR = 0;
+float speed = 0;
 
 // -----------   ANGLE MEASUREMENT   ------
 MPU6050 mpu;
@@ -84,12 +108,15 @@ void setup() {
     digitalWrite(STEP_L, LOW);
     digitalWrite(STEP_R, LOW);
         
+    initialize_PIDs();
     mpu.initialize();
     if (!mpu.testConnection()) {
         Serial.println("MPU6050 connection failed!");
         while (1);
     }
     calibrateMPU6050();
+    while(!ESP_BT.connected()) {}
+    BT_timeout = 10;
     prevSampleTime = micros();
     prevMotorTimeL = prevSampleTime;
     prevMotorTimeR = prevSampleTime;
@@ -97,27 +124,27 @@ void setup() {
 
 void loop(){
     // -------------------------   B L U E T O O T H   R E C I V E   C O M M A N D S   --- 
-    if (ESP_BT.connected()) {
+    if (BT_timeout>0) {
+        if (ESP_BT.connected()) BT_timeout = 10;
+        BT_timeout--;
         // Receive data from Bluetooth
         if (ESP_BT.available()){
             incomingChar = ESP_BT.read();  // Read one character
 
             switch(incomingChar){
                 case 'r':   // run
-                    run = 1;
+                    state = RUN;
                     previousTime = micros(); // to not mess up gyroAngle mesurement
                     gyroAngleX = 0;
                     break;
-                case 't':   // terminate
-                    run = 0;
-                    integralSum = 0;
-                    currError = 0;
-                    lastError = 0;
+                case 't':   // tune
+                    state = TUNE;
+                    angPID.reset();
+                    tune();
                     break;
-                case 'q':   // tune
-                    run = 0;
-                    tune(); // it exists because while driving sending more than one character creates unacceptable delay
-                    break;
+                case 'h':   // hides statistics while driving to prevent micro breaks in stearing
+                    if(show_stats) show_stats = 0;
+                    else show_stats = 1;
                 case 'w':
                     steer = steer + steer_factor;
                     break;
@@ -139,31 +166,33 @@ void loop(){
             }
         }
 
-        if(run){
+        if(state == RUN){
             // --------------------------------------------   P I D   --------------------
             take_measurement();
+            position = (posL + posR)>>1;    // right shift by one is equivalent to division by 2 but more optimal in case of time 
+                                            // in mm, with 200step per rot motor and r=3.2cm, mine 3.5, one step is one mm
 
-            currentValue = angleX + adjustment;
-            targetValue = steer;
-        
-            xP = (targetValue - currentValue)* vP;
-            integralSum += (targetValue - currentValue);
-            xI = integralSum * vI;
-            currError = (targetValue - currentValue);
-            xD = (currError - lastError)* vD;
-            lastError = currError;
+            if(mode == ANGLE_CONTROLL){
 
-            throttle = xP + xI + xD;
-            // -------------------------   B L U E T O O T H   S T A T U S   S E N D   ---
+                angPID.targetValue = steer;
+            } 
+            else if(mode == POSITION_CONTROLL) {
 
-            // Sending data to the controller every SENDING_PERIOD
-            if(sendDelay == SENDING_PERIOD){
-                sprintf(message, "-----\nP:%.0f   I:%.1f   D:%.0f\nAngle: %0.3f\nSteer: %0.2f    Turn: %.2f\nThrottle: %d\n", \
-                    xP, xI, xD, angleX, steer, turn, throttle);
-                ESP_BT.print(message);
-                sendDelay = 0;
+                posPID.targetValue = steer*100; // one step is about one mm, with default steer factor being 0.8, one arrow click is about 8cm or 0.8dm
+                posPID.currentValue = position;
+
+                angPID.targetValue = posPID.calculate();
             }
-            sendDelay++;
+            else if(mode == SPEED_CONTROLL) {
+                speed = position*1000000/SAMPLING_PERIOD; // in mm/s, division takes long time, I only want it in this mode
+
+                spdPID.targetValue = steer*10; // with default steer factor being 0.8, one arrow click is about 8mm/s which is okay
+                spdPID.currentValue = speed;
+
+                angPID.targetValue = spdPID.calculate();
+            }
+            angPID.currentValue = angleX + adjustment;
+            throttle = angPID.calculate();
 
             // ---------------------------------   M O T O R   C O N T R O L L   ---------
 
@@ -208,6 +237,23 @@ void loop(){
                 digitalWrite(DIR_R, LOW);
             }
 
+            // -------------------------   B L U E T O O T H   S T A T U S   S E N D   ---
+
+            // Sending data to the controller every SENDING_PERIOD
+            if(sendDelay == SENDING_PERIOD && show_stats){
+                sprintf(message, "-----\n\
+Ang P:%.0f  I:%.2f  D:%.0f\n\
+Pos P:%.0f  I:%.2f  D:%.0f\n\
+Spd P:%.0f  I:%.2f  D:%.0f\n\
+Angle:%0.3f\n\
+Steer:%0.1f  Turn:%.2f\n\
+Throt:%d  MotSpeed:%d\n\
+Pos:%dmm  Speed:%.0fmm/s\n",\
+angPID.xP, angPID.xI, angPID.xD, posPID.xP, posPID.xI, posPID.xD, spdPID.xP, spdPID.xI, spdPID.xD, angleX, steer, turn, throttle, motor_throttle, position, speed);
+                ESP_BT.print(message);
+                sendDelay = 0;
+            }
+            sendDelay++;
 
             // zrobić wersję jeszcze z użyciem rtosa jak by to nie działo
 
@@ -246,10 +292,14 @@ void loop(){
                     delayMicroseconds(10); // według dokumentacji wystraczy 1us impuls żeby zainicjować step, falling edge nic nie robi
                     if(do_step_R){
                         digitalWrite(STEP_R, LOW);
+                        if(throttleR < 0) posR--;
+                        else posR++;
                         prevMotorTimeR = currMotorTimeR;
                     }
                     if(do_step_L){
                         digitalWrite(STEP_L, LOW);
+                        if(throttleL < 0) posL--;
+                        else posL++;
                         prevMotorTimeL = currMotorTimeL;
                     }
                 }
@@ -265,40 +315,84 @@ void loop(){
 // ----------------   T U N E   R O B O T   P A R A M E T E R S   ------------
 void tune(){
     ESP_BT.print("Entered tune mode");
-    while(!run){
+    while(state == TUNE){
         // Receive data from Bluetooth
         if (ESP_BT.available()) {
             command = ESP_BT.readString(); // Read incoming data
         
             switch(command[0]){
                 case 'r':   // run
-                    run = 1;
-                    previousTime = micros(); // to not mess up gyroAngle mesurement
+                    state = RUN;
+                    angPID.reset();
+                    posPID.reset();
+                    spdPID.reset();
+                    posL = 0;
+                    posR = 0;
                     gyroAngleX = 0;
+                    previousTime = micros(); // to not mess up gyroAngle mesurement
                     break;
-                case 't':   // terminate
-                    run = 0;
-                    integralSum = 0;
-                    currError = 0;
-                    lastError = 0;
+                case 'a':   // tune angle PID and acceleration
+                    switch(command[1]){
+                        case 'm':
+                            mode = ANGLE_CONTROLL;
+                            break;
+                        case 'p':
+                            command.remove(0, 2); // Remove first two characters starting at index 0
+                            angPID.vP = command.toFloat();
+                            break;
+                        case 'i':
+                            command.remove(0, 2);
+                            angPID.vI = command.toFloat();
+                            break;
+                        case 'd':
+                            command.remove(0, 2);
+                            angPID.vD = command.toFloat();
+                            break;
+                        case 'c':   // acceleration
+                            command.remove(0, 2);
+                            acceleration = command.toFloat();
+                            break;
+                    }
                     break;
-                case 'p':
-                    command.remove(0, 1); // Remove first character starting at index 0
-                    vP = command.toFloat();
+                case 'p':   // tune position PID
+                    switch(command[1]){
+                        case 'm':
+                            mode = POSITION_CONTROLL;
+                            break;
+                        case 'p':
+                            command.remove(0, 2); 
+                            posPID.vP = command.toFloat();
+                            break;
+                        case 'i':
+                            command.remove(0, 2);
+                            posPID.vI = command.toFloat();
+                            break;
+                        case 'd':
+                            command.remove(0, 2);
+                            posPID.vD = command.toFloat();
+                            break;
+                    }
                     break;
-                case 'i':
-                    command.remove(0, 1);
-                    vI = command.toFloat();
+                case 's':   // tune speed PID
+                    switch(command[1]){
+                        case 'm':
+                            mode = SPEED_CONTROLL;
+                            break;
+                        case 'p':
+                            command.remove(0, 2); 
+                            spdPID.vP = command.toFloat();
+                            break;
+                        case 'i':
+                            command.remove(0, 2);
+                            spdPID.vI = command.toFloat();
+                            break;
+                        case 'd':
+                            command.remove(0, 2);
+                            spdPID.vD = command.toFloat();
+                            break;
+                    }
                     break;
-                case 'd':
-                    command.remove(0, 1);
-                    vD = command.toFloat();
-                    break;
-                case 'a':
-                    command.remove(0, 1);
-                    acceleration = command.toFloat();
-                    break;
-                case 's':
+                case 'f':   // speed factor
                     command.remove(0, 1);
                     steer_factor = command.toFloat();
                     break;
@@ -317,8 +411,14 @@ void tune(){
             }
         }
         take_measurement();
-        sprintf(message, "-----\nP:%.0f   I:%.2f   D:%.0f\nAngle: %0.3f\nSteer: %0.1f\nGyro: %.3f  Accel: %.3f\n",\
-            vP, vI, vD, angleX, steer, gyroAngleX, accelAngleX);
+        sprintf(message, "-----\n\
+Ang P:%.0f   I:%.2f   D:%.0f\n\
+Pos P:%.0f   I:%.2f   D:%.0f\n\
+Spd P:%.0f   I:%.2f   D:%.0f\n\
+Angle: %0.3f  Steer: %0.1f\n\
+Gyro:  %.3f  Accel: %.3f\n\
+Pos: %dmm  Speed: %.0fmm/s\n",\
+            angPID.vP, angPID.vI, angPID.vD, posPID.vP, posPID.vI, posPID.vD, spdPID.vP, spdPID.vI, spdPID.vD, angleX, steer, gyroAngleX, accelAngleX, position, speed);
         ESP_BT.print(message);
 
         delay(200);
