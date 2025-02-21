@@ -4,6 +4,9 @@
 #include "BluetoothSerial.h"
 #include "PID.h"
 
+// ---   I D E A S   ---
+// - dynamically switch microsteps to for wider motor speed ranges and much less wobbling in near zero speeds
+
 // ---   T E S T S   ---
 //#include "tests/bluetooth_test.h" - passed
 //#include "tests/mpu6050_test.h" - passed
@@ -23,7 +26,14 @@ const int STEP_R = 5;
 const int DIR_R = 17;
 const int STEP_L = 19;
 const int DIR_L = 18;
-const int MAX_SPEED_DELAY = -1650; // 2150-1650=500
+const int NEG_SLEEP_L = 13;
+const int MODE0_L = 12;
+const int MODE1_L = 14;
+const int NEG_SLEEP_R = 26;
+const int MODE0_R = 27;
+const int MODE1_R = 25;
+const int MAX_THROTTLE = 200;
+//const int MAX_SPEED_DELAY = -1650; // 2150-1650=500
 //const int MAX_SPEED_DELAY = -3420; // 3920-3420=500 (mnimal from my throttle equation)in stpes/sec corrected by max throttle value
 const int SAMPLING_PERIOD = 30000; // millis
 const int SENDING_PERIOD = 20; // one in how many periods i send parameters via bluetooth
@@ -37,8 +47,13 @@ int64_t exec_time = 0;
 float acceleration = 20, steer_factor = 0.8;
 float turn = 0, turn_factor = 10, turn_time_counter = 0, turn_dir = 0;
 
+int maxSpeed_delay = 450;    // in microseconds, test experimentally
+int microStepChenageSpeed_delay = 600;
+int minSpeed_delay = 1000000/8;
+
 float steer = 0;
 float adjustment = 0;
+int microstep = 8; // we start with 1/8 microstep
 
 //------------   B L U E T O O T H   ------ 
 BluetoothSerial ESP_BT; // Create a BluetoothSerial object
@@ -196,8 +211,8 @@ void loop(){
 
             // ---------------------------------   M O T O R   C O N T R O L L   ---------
 
-            if(throttle < -255) throttle = -255;
-            else if(throttle > 255) throttle = 255;
+            if(throttle < -MAX_THROTTLE) throttle = -MAX_THROTTLE;
+            else if(throttle > MAX_THROTTLE) throttle = MAX_THROTTLE;
 
             
             if(last_throttle - throttle < -acceleration){
@@ -218,12 +233,12 @@ void loop(){
             }
 
             throttleL = motor_throttle + turn;
-            if(throttleL < -255) throttleL = -255;
-            else if(throttleL > 255) throttleL = 255;
+            if(throttleL < -MAX_THROTTLE) throttleL = -MAX_THROTTLE;
+            else if(throttleL > MAX_THROTTLE) throttleL = MAX_THROTTLE;
 
             throttleR = motor_throttle - turn;
-            if(throttleR < -255) throttleR = -255;
-            else if(throttleR > 255) throttleR = 255;
+            if(throttleR < -MAX_THROTTLE) throttleR = -MAX_THROTTLE;
+            else if(throttleR > MAX_THROTTLE) throttleR = MAX_THROTTLE;
 
             if(throttleL < 0){
                 digitalWrite(DIR_L, LOW);
@@ -245,11 +260,11 @@ void loop(){
 Ang P:%.0f  I:%.2f  D:%.0f\n\
 Pos P:%.0f  I:%.2f  D:%.0f\n\
 Spd P:%.0f  I:%.2f  D:%.0f\n\
-Angle:%0.3f\n\
-Steer:%0.1f  Turn:%.2f\n\
+Angle:%0.3f  Steer:%0.1f\n\
+uStep:1/%d  Turn:%.2f\n\
 Throt:%d  MotSpeed:%d\n\
 Pos:%dmm  Speed:%.0fmm/s\n",\
-angPID.xP, angPID.xI, angPID.xD, posPID.xP, posPID.xI, posPID.xD, spdPID.xP, spdPID.xI, spdPID.xD, angleX, steer, turn, throttle, motor_throttle, position, speed);
+angPID.xP, angPID.xI, angPID.xD, posPID.xP, posPID.xI, posPID.xD, spdPID.xP, spdPID.xI, spdPID.xD, angleX, steer, microstep, turn, throttle, motor_throttle, position, speed);
                 ESP_BT.print(message);
                 sendDelay = 0;
             }
@@ -261,12 +276,25 @@ angPID.xP, angPID.xI, angPID.xD, posPID.xP, posPID.xI, posPID.xD, spdPID.xP, spd
             // jeżli sybkość samplowania jest szybsza niż szybkość motoru to przechodzić przez tą pętę nawet kila razy i doppiero za którymś puścić silnik
             // żeby nie staneły koła i czały czas updateowała się szykość
 
-            // tak żeby thorttle było liniowe                            200000
-            if(throttleR != 0) time_to_next_step_R = MAX_SPEED_DELAY + ((550000/abs(throttleR)));
+            // tak żeby thorttle było liniowe
+            if(throttleR != 0) time_to_next_step_R = map(abs(throttleR), 1, MAX_THROTTLE, minSpeed_delay, maxSpeed_delay);
             else time_to_next_step_R = 3000000;
 
-            if(throttleL != 0) time_to_next_step_L = MAX_SPEED_DELAY + ((550000/abs(throttleL)));
+            if(throttleL != 0) time_to_next_step_L = map(abs(throttleL), 1, MAX_THROTTLE, minSpeed_delay, maxSpeed_delay);
             else time_to_next_step_L = 3000000;
+
+            switch(microstep){
+                case 1:
+                    
+            }
+
+            // handle dynamic microstepping
+            if(time_to_next_step_R < microStepChenageSpeed_delay*microstep && microstep > 1){
+                // rightshift >> division by 2, I'm usinig it because it goes like 8>4>2>1 and is less timeconsuming 
+                // leftshift  >> multiplication by 2
+                microstep >> 1;             
+                time_to_next_step_R << 1;
+            }
 
             exec_time = prevSampleTime - micros();
 
