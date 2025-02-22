@@ -32,10 +32,8 @@ const int MODE1_L = 14;
 const int NEG_SLEEP_R = 26;
 const int MODE0_R = 27;
 const int MODE1_R = 25;
-const int MAX_THROTTLE = 200;
-//const int MAX_SPEED_DELAY = -1650; // 2150-1650=500
-//const int MAX_SPEED_DELAY = -3420; // 3920-3420=500 (mnimal from my throttle equation)in stpes/sec corrected by max throttle value
-const int SAMPLING_PERIOD = 30000; // millis
+const int MAX_THROTTLE = 500;
+const int SAMPLING_PERIOD = 20000; // millis
 const int SENDING_PERIOD = 20; // one in how many periods i send parameters via bluetooth
 
 int throttle = 0, last_throttle = 0, motor_throttle = 0, throttleL = 0, throttleR = 0;
@@ -48,12 +46,11 @@ float acceleration = 20, steer_factor = 0.8;
 float turn = 0, turn_factor = 10, turn_time_counter = 0, turn_dir = 0;
 
 int maxSpeed_delay = 450;    // in microseconds, test experimentally
-int microStepChenageSpeed_delay = 600;
 int minSpeed_delay = 1000000/8;
 
 float steer = 0;
 float adjustment = 0;
-int microstep = 8; // we start with 1/8 microstep
+int microstep = 3; // powers of microstepping <0-3>, we start with 1/8 microstep which is 1/2^3 
 
 //------------   B L U E T O O T H   ------ 
 BluetoothSerial ESP_BT; // Create a BluetoothSerial object
@@ -72,9 +69,9 @@ PID posPID;
 PID spdPID;
 
 void initialize_PIDs(){
-    angPID.vP = 130;     
-    angPID.vI = 18;
-    angPID.vD = 1500;
+    angPID.vP = 30;     
+    angPID.vI = 0;
+    angPID.vD = 0;
 
     posPID.vP = 0;     
     posPID.vI = 0;
@@ -184,8 +181,9 @@ void loop(){
         if(state == RUN){
             // --------------------------------------------   P I D   --------------------
             take_measurement();
-            position = (posL + posR)>>1;    // right shift by one is equivalent to division by 2 but more optimal in case of time 
-                                            // in mm, with 200step per rot motor and r=3.2cm, mine 3.5, one step is one mm
+            position = (posL + posR)>>(1+microstep);    // right shift by 1 is equivalent to division by 2 but more optimal in case of time
+                                                        // compensating for microsteps
+                                                        // in mm, with 200step per rot motor and r=3.2cm, mine 3.5, one step is one mm
 
             if(mode == ANGLE_CONTROLL){
 
@@ -239,17 +237,36 @@ void loop(){
             throttleR = motor_throttle - turn;
             if(throttleR < -MAX_THROTTLE) throttleR = -MAX_THROTTLE;
             else if(throttleR > MAX_THROTTLE) throttleR = MAX_THROTTLE;
-
+/*
             if(throttleL < 0){
                 digitalWrite(DIR_L, LOW);
             } else {
                 digitalWrite(DIR_L, HIGH);
             }
-
             if(throttleR < 0){
                 digitalWrite(DIR_R, HIGH);
             } else {
                 digitalWrite(DIR_R, LOW);
+            }
+            --- T I P --- for faster gpio state chenageing:
+            for pins 0-31:
+                GPIO.out_w1ts = (1ULL << PIN);  // Set HIGH (1 cycle)
+                GPIO.out_w1tc = (1ULL << PIN);  // Set LOW (1 cycle)
+            for pins 32-39:
+                GPIO.out1_w1ts.val = (1 << (PIN - 32));  // Set HIGH (1 cycle)
+                GPIO.out1_w1tc.val = (1 << (PIN - 32));  // Set LOW (1 cycle)
+
+            digitalWrite(DIR_R, LOW); (10-30 cycles)
+*/      
+            if(throttleL < 0){
+                GPIO.out_w1tc = (1ULL << DIR_L);  // Set LOW (1 cycle)
+            } else {
+                GPIO.out_w1ts = (1ULL << DIR_L);  // Set HIGH (1 cycle)
+            }
+            if(throttleR < 0){
+                GPIO.out_w1ts = (1ULL << DIR_R);  // Set HIGH (1 cycle)
+            } else {
+                GPIO.out_w1tc = (1ULL << DIR_R);  // Set LOW (1 cycle)
             }
 
             // -------------------------   B L U E T O O T H   S T A T U S   S E N D   ---
@@ -264,7 +281,7 @@ Angle:%0.3f  Steer:%0.1f\n\
 uStep:1/%d  Turn:%.2f\n\
 Throt:%d  MotSpeed:%d\n\
 Pos:%dmm  Speed:%.0fmm/s\n",\
-angPID.xP, angPID.xI, angPID.xD, posPID.xP, posPID.xI, posPID.xD, spdPID.xP, spdPID.xI, spdPID.xD, angleX, steer, microstep, turn, throttle, motor_throttle, position, speed);
+angPID.xP, angPID.xI, angPID.xD, posPID.xP, posPID.xI, posPID.xD, spdPID.xP, spdPID.xI, spdPID.xD, angleX, steer, 1<<microstep, turn, throttle, motor_throttle, position, speed);
                 ESP_BT.print(message);
                 sendDelay = 0;
             }
@@ -277,26 +294,92 @@ angPID.xP, angPID.xI, angPID.xD, posPID.xP, posPID.xI, posPID.xD, spdPID.xP, spd
             // żeby nie staneły koła i czały czas updateowała się szykość
 
             // tak żeby thorttle było liniowe
-            if(throttleR != 0) time_to_next_step_R = map(abs(throttleR), 1, MAX_THROTTLE, minSpeed_delay, maxSpeed_delay);
+            if(throttleR != 0) time_to_next_step_R = minSpeed_delay/map(abs(throttleR), 1, MAX_THROTTLE, 1, minSpeed_delay/maxSpeed_delay);
             else time_to_next_step_R = 3000000;
 
-            if(throttleL != 0) time_to_next_step_L = map(abs(throttleL), 1, MAX_THROTTLE, minSpeed_delay, maxSpeed_delay);
+            if(throttleL != 0) time_to_next_step_L = minSpeed_delay/map(abs(throttleL), 1, MAX_THROTTLE, 1, minSpeed_delay/maxSpeed_delay);
             else time_to_next_step_L = 3000000;
 
-            switch(microstep){
-                case 1:
-                    
-            }
+            // we want as high microstep as possible for ride to be smoother
 
-            // handle dynamic microstepping
-            if(time_to_next_step_R < microStepChenageSpeed_delay*microstep && microstep > 1){
+            // --------------------------------------------------------------------------   D Y N A M I C   M I C R O S T E P P I N G   -------------
+
+            // chceck every smallest microstep untill you find one to be acceptabe
+            if(time_to_next_step_R >> 3 > maxSpeed_delay){
                 // rightshift >> division by 2, I'm usinig it because it goes like 8>4>2>1 and is less timeconsuming 
-                // leftshift  >> multiplication by 2
-                microstep >> 1;             
-                time_to_next_step_R << 1;
+                microstep = 3;             
+                time_to_next_step_R = time_to_next_step_R >> 3;
+            }
+            else if(time_to_next_step_R >> 2 > maxSpeed_delay){
+                microstep = 2;             
+                time_to_next_step_R = time_to_next_step_R >> 2;
+            }
+            else if(time_to_next_step_R >> 1 > maxSpeed_delay){
+                microstep = 1;             
+                time_to_next_step_R = time_to_next_step_R >> 1;
+            }
+            else {
+                microstep = 0;
             }
 
-            exec_time = prevSampleTime - micros();
+            if(time_to_next_step_R >> 3 > maxSpeed_delay){
+                // rightshift >> division by 2, I'm usinig it because it goes like 8>4>2>1 and is less timeconsuming 
+                microstep = 3;             
+                time_to_next_step_R = time_to_next_step_R >> 3;
+            }
+            else if(time_to_next_step_R >> 2 > maxSpeed_delay){
+                microstep = 2;             
+                time_to_next_step_R = time_to_next_step_R >> 2;
+            }
+            else if(time_to_next_step_R >> 1 > maxSpeed_delay){
+                microstep = 1;             
+                time_to_next_step_R = time_to_next_step_R >> 1;
+            }
+            else {
+                microstep = 0;
+            }
+
+            switch(microstep){
+                case 0:
+                    GPIO.out_w1tc = (1ULL << DIR_L);  // Set LOW (1 cycle)
+                    GPIO.out_w1tc = (1ULL << DIR_L);  // Set LOW (1 cycle)
+                    break;
+                case 1:
+                    GPIO.out_w1ts = (1ULL << DIR_L);  // Set HIGH (1 cycle)
+                    GPIO.out_w1tc = (1ULL << DIR_L);  // Set LOW (1 cycle)
+                    break;
+                case 2:
+                    GPIO.out_w1tc = (1ULL << DIR_L);  // Set LOW (1 cycle)
+                    GPIO.out_w1ts = (1ULL << DIR_L);  // Set HIGH (1 cycle)
+                    break;
+                case 3:
+                    GPIO.out_w1ts = (1ULL << DIR_L);  // Set HIGH (1 cycle)
+                    GPIO.out_w1ts = (1ULL << DIR_L);  // Set HIGH (1 cycle)
+                    break;
+            }
+
+            switch(microstep){
+                case 0:
+                    GPIO.out_w1tc = (1ULL << DIR_L);  // Set LOW (1 cycle)
+                    GPIO.out_w1tc = (1ULL << DIR_L);  // Set LOW (1 cycle)
+                    break;
+                case 1:
+                    GPIO.out_w1ts = (1ULL << DIR_L);  // Set HIGH (1 cycle)
+                    GPIO.out_w1tc = (1ULL << DIR_L);  // Set LOW (1 cycle)
+                    break;
+                case 2:
+                    GPIO.out_w1tc = (1ULL << DIR_L);  // Set LOW (1 cycle)
+                    GPIO.out_w1ts = (1ULL << DIR_L);  // Set HIGH (1 cycle)
+                    break;
+                case 3:
+                    GPIO.out_w1ts = (1ULL << DIR_L);  // Set HIGH (1 cycle)
+                    GPIO.out_w1ts = (1ULL << DIR_L);  // Set HIGH (1 cycle)
+                    break;
+            }
+
+//            exec_time = prevSampleTime - micros();
+
+            // -----------------------------------------------------------------------   M O T O R   M O V E M E N T   ---------------
 
             // w trakcie czekania na kolejnego sampla ma kręcić silnikami
             do{
@@ -315,17 +398,17 @@ angPID.xP, angPID.xI, angPID.xD, posPID.xP, posPID.xI, posPID.xD, spdPID.xP, spd
                 if(wait_for_sample){
                     do_step_R = currMotorTimeR - prevMotorTimeR > time_to_next_step_R - 600; // 390 us is a resulution of one throttle
                     do_step_L = currMotorTimeL - prevMotorTimeL > time_to_next_step_L - 600; // it us used so that both motors fire unless there is a turn
-                    if(do_step_R) digitalWrite(STEP_R, HIGH);
-                    if(do_step_L) digitalWrite(STEP_L, HIGH);
+                    GPIO.out_w1ts = (1ULL << STEP_R);  // Set HIGH (1 cycle)
+                    GPIO.out_w1ts = (1ULL << STEP_L);  // Set HIGH (1 cycle)
                     delayMicroseconds(10); // według dokumentacji wystraczy 1us impuls żeby zainicjować step, falling edge nic nie robi
                     if(do_step_R){
-                        digitalWrite(STEP_R, LOW);
+                        GPIO.out_w1tc = (1ULL << STEP_R);  // Set LOW (1 cycle)
                         if(throttleR < 0) posR--;
                         else posR++;
                         prevMotorTimeR = currMotorTimeR;
                     }
                     if(do_step_L){
-                        digitalWrite(STEP_L, LOW);
+                        GPIO.out_w1tc = (1ULL << STEP_L);  // Set LOW (1 cycle)
                         if(throttleL < 0) posL--;
                         else posL++;
                         prevMotorTimeL = currMotorTimeL;
@@ -359,7 +442,7 @@ void tune(){
                     gyroAngleX = 0;
                     previousTime = micros(); // to not mess up gyroAngle mesurement
                     break;
-                case 'a':   // tune angle PID and acceleration
+                case 'a':   // tune angle PID, acceleration nad adjutment
                     switch(command[1]){
                         case 'm':
                             mode = ANGLE_CONTROLL;
@@ -379,6 +462,10 @@ void tune(){
                         case 'c':   // acceleration
                             command.remove(0, 2);
                             acceleration = command.toFloat();
+                            break;
+                        case 'j':   // adjustment
+                            command.remove(0, 1);
+                            adjustment = command.toFloat();
                             break;
                     }
                     break;
@@ -401,7 +488,7 @@ void tune(){
                             break;
                     }
                     break;
-                case 's':   // tune speed PID
+                case 's':   // tune speed PID and steer factor
                     switch(command[1]){
                         case 'm':
                             mode = SPEED_CONTROLL;
@@ -418,22 +505,52 @@ void tune(){
                             command.remove(0, 2);
                             spdPID.vD = command.toFloat();
                             break;
+                        case 't':   // steer factor
+                            command.remove(0, 1);
+                            steer_factor = command.toFloat();
+                            break;
                     }
                     break;
-                case 'f':   // speed factor
-                    command.remove(0, 1);
-                    steer_factor = command.toFloat();
-                    break;
                 case 'm':
-                    command.remove(0, 1);
-                    adjustment = command.toFloat();
+                    if(command[1]=='x'){   
+                        command.remove(0, 2);
+                        maxSpeed_delay = command.toInt(); 
+                    } else if(command[1]=='n'){
+                        command.remove(0, 2);
+                        minSpeed_delay = command.toInt(); 
+                    }
+                    break;
+                case 'h':   // show command help
+                    sprintf(message, "-----\n\
+To exit press q\n\
+r - run    h - show help\n\
+Change PID parameters:\n\
+[1][2][value]   eg. ai15\n\
+[1] Which controller:\n\
+a - angle, p - pos, s - speed\n\
+[2] Which gain: p,i,d");
+                    ESP_BT.print(message);
+                    sprintf(message, "am - angle ctrl mode\n\
+pm - pos ctrl mode\n\
+sm - speed ctrl mode\n\
+ac[] - max accelaration\n\
+mx[] - step delay for max speed\n\
+mn[] - step delay for min speed\n");
+                    ESP_BT.print(message);
+                    sprintf(message, "st[] - foreward steer factor\n\
+aj[] - angle adjustment\n\
+c - calibrate\n\
+1-9 - set current steer *st\n\
+with 5 being default\n");
+                    ESP_BT.print(message);
+                    while(ESP_BT.read() != 'q'){};
                     break;
                 case 'c':
                     calibrateMPU6050();
                     ESP_BT.print("Calibrated\n");
                     break;
                 default:    // steer value 1/9 -> -2.0/2.0
-                    if((command[0] >= '0' && command[0] <= '9')||(command[0] >= 0 && command[0] <= 9)) // zabezpieczenie przed niewałaściwym stringiem
+                    if((command[0] >= '1' && command[0] <= '9')||(command[0] >= 0 && command[0] <= 9)) // zabezpieczenie przed niewałaściwym stringiem
                         steer =  steer_factor * (command[0] - '1' - 5); //konwersja char do int
                     break;
             }
