@@ -1,11 +1,7 @@
 #include "PID.h"
 
 PID::PID(){
-    targetValue = 0;
-    currentValue = 0;
-    integralSum = 0;
-    currError = 0;
-    lastError = 0;
+    reset();
 }
 
 float PID::calculate(){
@@ -21,6 +17,8 @@ float PID::calculate(){
 }
 
 void PID::reset(){
+    targetValue = 0;
+    currentValue = 0;
     integralSum = 0;
     currError = 0;
     lastError = 0;

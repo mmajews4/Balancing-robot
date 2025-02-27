@@ -1,0 +1,75 @@
+// Robot stable in angle mode if not interupted, if pushed too hard it begins rising oscilatoions untill out of balance
+angPID.vP = 30;     
+angPID.vI = 3;
+angPID.vD = 30;
+
+posPID.vP = 0;     
+posPID.vI = 0;
+posPID.vD = 0;
+
+spdPID.vP = 0;     
+spdPID.vI = 0;
+spdPID.vD = 0;
+
+maxSpeed_delay = 450;
+minSpeed_delay = 1000000;
+SAMPLING_PERIOD = 15000;
+MAX_THROTTLE = 500;
+acceleration = 20;
+
+// Robot ma przy mocniejszym pchnięciu wpada w stabilne oscylacje i z nich nie wychodzi, w żadną stonę
+angPID.vP = 20;     
+angPID.vI = 7;
+angPID.vD = 20;
+
+posPID.vP = 0;     
+posPID.vI = 0;
+posPID.vD = 0;
+
+spdPID.vP = 0;     
+spdPID.vI = 0;
+spdPID.vD = 0;
+
+maxSpeed_delay = 450;
+minSpeed_delay = 1000000;
+SAMPLING_PERIOD = 15000;
+MAX_THROTTLE = 500;
+acceleration = 50;
+
+// Robot nadal ma oscylacje ale powoli są tłumione// najlepsze do tej pory
+angPID.vP = 15;     
+angPID.vI = 8;
+angPID.vD = 20;
+
+posPID.vP = 0;     
+posPID.vI = 0;
+posPID.vD = 0;
+
+spdPID.vP = 0;     
+spdPID.vI = 0;
+spdPID.vD = 0;
+
+maxSpeed_delay = 450;
+minSpeed_delay = 1000000;
+SAMPLING_PERIOD = 15000;
+MAX_THROTTLE = 500;
+acceleration = 50;
+
+// Robot tłumi oscylacje po około 30s, da się już nim sterować
+angPID.vP = 4;     
+angPID.vI = 7;
+angPID.vD = 50;
+
+posPID.vP = 0;     
+posPID.vI = 0;
+posPID.vD = 0;
+
+spdPID.vP = 0;     
+spdPID.vI = 0;
+spdPID.vD = 0;
+
+maxSpeed_delay = 650;
+minSpeed_delay = 1000000;
+SAMPLING_PERIOD = 15000;
+MAX_THROTTLE = 500;
+acceleration = 50;
