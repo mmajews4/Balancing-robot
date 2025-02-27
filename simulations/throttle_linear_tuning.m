@@ -1,4 +1,4 @@
-clc; clear all; close all;
+clc; clear all; close all; format long;
 
 % simulation to figure out linear thottle tuning with specific values
 figure(1);
@@ -8,7 +8,7 @@ max_step_time = 1000000;
 
 max_throttle = 255;
 
-t = 0:max_throttle-1;
+t = 1:max_throttle-1;
 
 map_t = t .* ( ((max_step_time/min_step_time)-1)/(max_throttle-1) ) + 1;
 
