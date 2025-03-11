@@ -59,7 +59,7 @@ String command = "";
 uint8_t show_stats = 1; // you can hide stats while riding so that robot cycle doesn't stop momentarly to send bluetooh message
 int sendDelay = SENDING_PERIOD;
 int BT_timeout = 10;
-char message[180];
+char message[200];
 void tune();
 
 //-----------------   P I D   --------------
@@ -199,9 +199,9 @@ void loop(){
         } else if(state == RUN){
             // --------------------------------------------   P I D   --------------------
             take_measurement();
-            position = (posL + posR)/16000.0;    // right shift by 1 is equivalent to division by 2 but more optimal in case of time
-                                            // compensating for microsteps, posL and posR are counted in 1/8th step
-                                            // in m, with 200step per rot motor and r=3.2cm, mine 3.5, one step is one mm
+            position = (posL + posR)/16000.0;   // right shift by 1 is equivalent to division by 2 but more optimal in case of time
+                                                // compensating for microsteps, posL and posR are counted in 1/8th step
+                                                // in m, with 200step per rot motor and r=3.2cm, mine 3.5, one step is one mm
 
             if(mode == ANGLE_CONTROLL){
 
@@ -256,16 +256,6 @@ void loop(){
             if(throttleR < -MAX_THROTTLE) throttleR = -MAX_THROTTLE;
             else if(throttleR > MAX_THROTTLE) throttleR = MAX_THROTTLE;
 /*
-            if(throttleL < 0){
-                digitalWrite(DIR_L, LOW);
-            } else {
-                digitalWrite(DIR_L, HIGH);
-            }
-            if(throttleR < 0){
-                digitalWrite(DIR_R, HIGH);
-            } else {
-                digitalWrite(DIR_R, LOW);
-            }
             --- T I P --- for faster gpio state chenageing:
             for pins 0-31:
                 GPIO.out_w1ts = (1ULL << PIN);  // Set HIGH (1 cycle)
@@ -293,13 +283,13 @@ void loop(){
             if(sendDelay == SENDING_PERIOD && show_stats){
                 sprintf(message, "-----\n\
 Spd P:%.0f  I:%.2f  D:%.0f\n\
-Pos P:%.2f  I:%.4f  D:%.2f\n\
+Pos P:%.4f I:%.5f D:%.4f\n\
 Ang P:%.0f  I:%.2f  D:%.0f\n\
-Angle:%0.3f   Steer:%0.1f\n\
+Angle:%0.3f  Steer:%0.1f\n\
+Thrott:%d    Target:%0.3f\n\
 uStep:1/%d   Turn:%.2f\n\
-Thro:%d   MotSpd:%d\n\
-Pos:%.2fm   Spd:%.0f\n",\
-spdPID.xP, spdPID.xI, spdPID.xD, posPID.xP, posPID.xI, posPID.xD, angPID.xP, angPID.xI, angPID.xD, angleX, steer, 1<<microstep, turn, throttle, motor_throttle, position, speed);
+Pos:%.3fm   Spd:%.0f\n",\
+spdPID.xP, spdPID.xI, spdPID.xD, posPID.xP, posPID.xI, posPID.xD, angPID.xP, angPID.xI, angPID.xD, angleX, steer, throttle, angPID.targetValue, 1<<microstep, turn, position, speed);
                 ESP_BT.print(message);
                 sendDelay = 0;
             }
@@ -587,7 +577,7 @@ w,s,a,d - steering\n");
         take_measurement();
         sprintf(message, "-----\n\
 Ang P:%.0f   I:%.2f   D:%.0f\n\
-Pos P:%.3f   I:%.4f   D:%.3f\n\
+Pos P:%.4f I:%.5f D:%.4f\n\
 Spd P:%.0f   I:%.2f   D:%.0f\n\
 Angle: %0.3f  Steer: %0.1f\n\
 Gyro:  %.3f  Accel: %.3f\n\
